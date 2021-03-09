@@ -1,0 +1,819 @@
+---
+title: "Credit Fraud"
+author: "The one (Jiawei Lin & Ying Zhou & Yiqian Shen)"
+date: "10/12/2020"
+output:
+  word_document: default
+  pdf_document: default
+fig_width: 14
+fig_height: 8
+---
+
+# Introduction
+
+The increasing popularity of credit cards in life also allows crooks to find opportunities. Compared with the proportion of credit card defaults, the proportion of credit card fraud is smaller, but it is extremely harmful.
+
+Credit card fraud is an indicator of the traditional financial industry. Credit card debt attempts include using the characteristics of credit card overdraft consumption for the purpose of illegal possession. After being collected by the issuing bank, the overdraft is still not returned or after a large number of overdrafts, it escapes and conceals the identity to avoid repayment. The act of payment responsibility.
+
+In this case, we have 4 questions 
+1. ?
+1. What variables are related to normal transactions and fraudulent transactions?
+2. Is the transaction time and transaction amount related to fraudulent transactions?
+3. Can the established model accurately detect variables related to normal transactions and fraudulent transactions?
+4. Can these variables increase the accuracy of the model for detecting fraudulent transactions?
+5. Does imbalance data have an impact on model building and testing?
+6. Compare models to find the most suitable model
+
+The data analysis done by our team is to model the current credit card fraud and find out whether the current variables are the best variables for testing credit cards. Our team will use the models learned so far for analysis. At present, we use logistic regression and Ridge regression and LASSO regression these two regularization techniques to built models. There are many variables in this data set. 
+
+In this case, logistic can help us look for risk factors, find some bad factors that affect dependent variables, find risk factors through odds ratios, which can be used for prediction, and can predict the probability or likelihood of a certain situation, and for discrimination and judgment. Category to which new samples belong.
+
+Because the sample information we have is limited, and we want to use limited information to estimate too many coefficients, the information is likely to be insufficient, so it is necessary to filter variables to improve the estimation effect. That's why we use lasso
+Ridge will push correlated variables toward each other and avoid situations where one has a very large positive coefficient and the other has a very large negative coefficient. In addition, many irrelevant variable coefficients will be approximated to zero. It means that we can reduce the noise in our data set and help us more clearly identify the real signals in the model.
+
+Since the credit card fraud data is encrypted, the variable names are anonymous, represented by V1-V28. The following is the data analysis carried out by our team.
+
+```{r warning=FALSE, message=FALSE}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(InformationValue)
+library(caTools)
+library(ROCR)
+library(corrplot)
+library(rpart)
+library(ROSE)
+library(glmnet)
+library(Matrix)
+library(pls)
+library(tinytex)
+library(graphics)
+library(gridExtra)
+```
+
+# Analysis
+
+**read and view original data**
+```{r, warning=FALSE}
+creditcard <- read_csv("~/CPS-Analytics/2020 Fall Quarter/ALY 6015/Final Project/creditcard.csv", col_types = cols())
+## Check the missing values of data set
+colSums(is.na(creditcard) == TRUE)
+str(creditcard, give.attr = FALSE)
+```
+
+Through the inspection of the data, we found that all the data are complete and there are no missing values, etc., so we directly proceeded to the next step of data sorting.
+
+```{r}
+creditcard <- creditcard %>%
+        select(31:30, everything())
+## The Class is in column 31 and the Amount is in column 30, and change the Class to the first column.
+head(creditcard)
+```
+
+
+**Cheak the class bias**
+
+**nfraud = 0, fraud = 1**
+
+```{r}
+table(creditcard$Class)
+round(prop.table(table(creditcard$Class)), digits = 4)
+```
+
+
+**Double check the fraud proportion**
+
+```{r}
+print(paste("The Fraud proportion is ", 
+            round(100*length(creditcard$Class[creditcard$Class] == 1)
+                  /length(creditcard$Class), digits = 2), "%" , sep = ""))
+
+```
+
+```{r}
+tbl <- with(creditcard, table(Class))
+barplot(tbl, beside = TRUE, col = c("lightblue", "red"), legend = TRUE, 
+        main = "Class distribution")
+```
+
+
+```{r}
+ggplot(creditcard, aes(x= V1, group = Class, fill = as.factor(Class))) +
+  geom_histogram(bins = 50) + ggtitle("Histogram of V1") + 
+  xlab("V1") 
+
+```
+
+```{r}
+ggplot(creditcard, aes(x= V16, group = Class, fill = as.factor(Class))) + 
+  geom_histogram(bins = 120) + ggtitle ("Histogram of V16") + xlab("V16")
+
+```
+
+By through exploratory data analysis we find the dataset contain 31 type numeric variables.Through the above diagrams of ggplot, it is obvious that the data is seriously imbalance. In addition, we find there is total 284807 transaction record which contain 284315 non-fraud transaction and 492 fraud transaction. By compute the proportion of class, when the class is 0, that is nfraud, is much higher than the situation of class=1, fraud. We find the fraud proportion is 0.17% and 99.83% nfraud which means the data is totally imbalance. To ensure the accuracy of the later modeling, we checked whether the data imbalance will affect the modeling. We used the tree model to test accuracy.
+
+**Create Trainning and Testing**
+```{r}
+set.seed(10000000)
+split <- sample.split(creditcard$Class, SplitRatio = 0.7)
+nfraud.train <- subset(creditcard, split == TRUE)
+nfraud.test  <- subset(creditcard, split == FALSE)
+nrow(nfraud.test)
+nrow(nfraud.train)
+```
+
+**Accuracy of oversampling**
+As we can see, the data set contains only 0.17% fraud and 99.83% nfraud. This is a severely unbalanced data set. So, will this seriously affect our forecast accuracy? Let us build a model based on these data. We used the decision tree algorithm for modeling.
+
+```{r}
+treeimb <- rpart(Class ~ ., data = nfraud.train)
+pre.treeimb <- predict(treeimb, newdata= nfraud.test)
+```
+
+```{r}
+accuracy.meas(nfraud.test$Class, pre.treeimb)
+roc.curve(nfraud.test$Class, pre.treeimb, plotit = F)
+```
+
+These indicators provide interesting explanations. When the threshold is 0.5, Precision = 0.933 indicates a false alarm. Recall rate = 0.757 is not high, indicating that we have more false frauds. F = 0.418, indicating that the accuracy of the model is average.
+AUC = 0.932 is not a high score. Therefore, We decided to balance the data afterward.
+
+
+**Balance sampling**
+
+```{r}
+
+newdata <- ovun.sample(Class ~ ., data = creditcard, method = "under", 
+                                  N = 984, seed = 123 )$data
+table(newdata$Class)
+
+```
+
+We take the sample from the next value so that both the fraud and nfraud values are at 492. In the case of such a data set, we split it into a train set and a test set and finally use the test data set to check the accuracy of the model.
+
+```{r}
+table <- with(newdata, table(Class))
+barplot(table, beside = TRUE, col = c("lightblue", "red"), legend = TRUE, 
+        main = "New Class distribution")
+```
+
+
+```{r}
+ggplot(newdata, aes(x= V1, group = Class, fill = as.factor(Class))) +
+  geom_histogram(bins = 50) + ggtitle("Histogram of V1") + 
+  xlab("V1") 
+```
+
+```{r}
+ggplot(newdata, aes(x= V16, group = Class, fill = as.factor(Class))) + 
+  geom_histogram(bins = 120) + ggtitle ("Histogram of V16") + xlab("V16")
+
+```
+
+
+```{r}
+par(mfrow=c(1,2))
+cor(creditcard) %>% 
+  corrplot::corrplot(method = 'color',type = 'full', tl.cex = 0.6)
+cor(newdata) %>%
+  corrplot::corrplot(method = "color", type = "full", tl.cex = 0.6)
+```
+
+We can see through the corrplot diagram that when the data is balanced, the correlation fit is also revealed. When the data is severely imbalance, many correlations are ignored, and the data lacks sensitivity. When the data is balanced, the sensitivity is increased, and the correlation between the dependent variable and the independent variables can be better found.
+
+Our main aim in this section is to remove "extreme outliers" from features that have a high correlation with classes. This will have a positive impact on the accuracy of our models.
+
+Negative Correlations: V10, V12, V14 and V16 are negatively correlated. Notice how the lower these values are, the more likely the end result will be a fraud transaction.
+Positive Correlations: V2, V4, V11, and V19 are positively correlated. Notice how the higher these values are, the more likely the end result will be a fraud transaction.
+BoxPlots: We will use boxplots to have a better understanding of the distribution of these features in fradulent and non fradulent transactions.
+
+**Negative Correlations**
+```{r}
+
+n1 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V10,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V10 VS Class Negative Correlation")
+
+n2 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V12,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V12 VS Class Negative Correlation")
+
+n3 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V14,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V14 VS Class Negative Correlation")
+
+n4 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V16,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V16 VS Class Negative Correlation")
+
+grid.arrange(n1, n2, n3, n4, ncol=2, nrow=2)
+```
+
+**Positive Correlations**
+
+```{r}
+
+p1 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V2,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V2 VS Class Positive Correlation")
+
+p2 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V4,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V4 VS Class Positive Correlation")
+
+p3 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V11,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V11 VS Class Positive Correlation")
+
+p4 <- ggplot(data = newdata,aes(x=as.factor(Class),y = V19,
+                                     fill = as.factor(Class))) + 
+  geom_boxplot() + ggtitle("V19 VS Class Positive Correlation")
+
+grid.arrange(p1, p2, p3, p4, ncol=2, nrow=2)
+```
+
+Boxplots: In addition to the 25th and 75th percentiles, it is also easy to see extreme outliers (points outside the upper or lower bounds).
+As can be seen from the boxplot diagram above, the negatively and positively correlated independent variables have extreme outliers values. We plan to remove extreme outliers values to see if we can increase the accuracy of data modeling.
+
+**Remove extreme outliers**
+
+```{r}
+# Remove outliers from a column
+remove_outliers <- function(x, na.rm = TRUE, ...) {
+  qnt <- quantile(x, probs=c(.25, .75), na.rm = na.rm, ...)
+  caps <- quantile(x, probs=c(.05, .95), na.rm = na.rm, ...)
+  H <- 1.5 * IQR(x, na.rm = na.rm)
+  y <- x
+  y[x < (qnt[1] - H)] <- caps[1]
+  y[x > (qnt[2] + H)] <- caps[2]
+  y
+}
+```
+
+```{r}
+newdata$V10 <- remove_outliers(newdata$V10)
+newdata$V12 <- remove_outliers(newdata$V12)
+newdata$V14 <- remove_outliers(newdata$V14)
+newdata$V16 <- remove_outliers(newdata$V16)
+newdata$V2 <- remove_outliers(newdata$V2)
+newdata$V4 <- remove_outliers(newdata$V4)
+newdata$V11 <- remove_outliers(newdata$V11)
+newdata$V19 <- remove_outliers(newdata$V19)
+
+```
+
+Interquartile Range (IQR): We calculate the difference between the 75% quantile and the 25% quantile. Our goal is to create a threshold that exceeds the 75th percentile and the 25th percentile. When the sample value exceeds this threshold，the sample will be replaced with a threshold between 5% quantile and 95% quantile.
+We must carefully define the threshold to replace outliers. We determine the threshold by multiplying a number (for example: 1.5) by (interquartile range). The higher the threshold, the fewer anomalies detected (multiplied by a higher number, for example: 3), and the lower the threshold, the more anomalies detected.
+The lower the threshold, the more outliers it will replace, but we want to focus more on "extreme outliers" rather than just outliers. Why? Because we may be at risk of information loss, which will lead to our model with lower accuracy.
+
+**Split the data**
+
+```{r}
+# Use newdata which is balanced and replaced extreme outliers
+set.seed(10000000)
+newsplit <- sample.split(newdata$Class, SplitRatio = 0.7)
+nfraud.train_under <- subset(newdata, newsplit == TRUE)
+nfraud.test_under  <- subset(newdata, newsplit == FALSE)
+nrow(nfraud.train_under)
+nrow(nfraud.test_under)
+```
+
+**Linear regression**
+```{r}
+lm.model1 <- lm(Class ~., data = nfraud.train_under)
+summary(lm.model1)
+```
+
+
+```{r}
+par(mfrow = c(2,2))
+plot(lm.model1)
+```
+
+We used the plot() function to check the fit of the model.  Based on the figures of Residuals vs fitted and scale location, the distribution of the residuals is relatively uniform, and the residuals do not increase or decrease with the increase of the y value, indicating that the residuals distribution conforms to the Guaasian-Markov Condition. According to the figure of normal Q-Q plot, we found the residuals of distribution is normal distribution because the points on the graph are as close as possible to the line y equals x. From the diagram, we can see that simple linear regression is suitable for this data. 
+
+```{r, results='hide'}
+step(lm.model1, direction = "backward")
+```
+
+```{r}
+lm.model2 <- lm(Class ~ Amount + Time + V1 + V2 + V3 + V4 + 
+                  V7 + V8 + V9 + V13 + V14 + V16 + V18 + V20 + 
+                  V23 + V26, data = nfraud.train_under)
+summary(lm.model2)
+```
+
+
+```{r}
+par(mfrow = c(2,2))
+plot(lm.model2)
+```
+
+```{r}
+lm.model2.pre <- predict(lm.model2, type = "response")
+lm.model2.opti <- optimalCutoff(nfraud.train_under$Class,
+                                   lm.model2.pre,
+                                   returnDiagnostics = TRUE)
+lm.model2.opti$misclassificationError
+lm.model2.res <- ifelse( lm.model2.pre > 
+                                      lm.model2.opti$optimalCutoff, 
+                                     "1","0" )
+table(nfraud.train_under$Class,lm.model2.res)
+```
+
+```{r}
+lm.model2.test.pre <- predict(lm.model2, type = "response", 
+                                 newdata = nfraud.test_under)
+lm.model2.test.pre.res <-  ifelse(lm.model2.test.pre > 
+                                       lm.model2.opti$optimalCutoff, 
+                                     "1","0")
+table(nfraud.test_under$Class ,lm.model2.test.pre.res)
+```
+```{r}
+cat("The prediction error of Train set is =", 
+    sqrt(mean((lm.model2.pre - nfraud.train_under$Class)^2)), "\n",
+    "The prediction error of Test set is =", 
+    sqrt(mean((lm.model2.test.pre - nfraud.test_under$Class)^2)))
+
+```
+
+# Put the sampling model into the original data
+
+```{r}
+lm.model.raw <- lm(Class ~ Amount + Time + V1 + V2 + V3 + V4 + 
+                  V7 + V8 + V9 + V13 + V14 + V16 + V18 + V20 + 
+                  V23 + V26, data = creditcard)
+```
+
+```{r}
+lm.model.raw.pre <- predict(lm.model.raw, type = "response")
+lm.model.raw.opti <- optimalCutoff(creditcard$Class, lm.model.raw.pre,
+                                   returnDiagnostics = TRUE)
+lm.model.raw.opti$misclassificationError
+lm.model.raw.res <- ifelse(lm.model.raw.pre > 
+                                      lm.model.raw.opti$optimalCutoff, 
+                                     "1","0" )
+table(creditcard$Class,lm.model.raw.res)
+```
+
+
+## Check the accuracy
+
+```{r}
+accuracy.meas(creditcard$Class, lm.model.raw.pre, 
+              threshold = lm.model.raw.opti$optimalCutoff)
+roc.curve(creditcard$Class, lm.model.raw.pre, plotit = F)
+```
+
+```{r}
+ROCRpredlm <- prediction(lm.model.raw.pre, creditcard$Class)
+ROCRperflm <- performance(ROCRpredlm, "tpr", "fpr")
+ROCRauclm <- performance(ROCRpredlm,measure = "auc")
+par(mar = c(5, 3, 2,3),pty='s')
+plot(ROCRperflm, colorize=TRUE, print.cutoffs.at = seq(0,1, by = 0.1), 
+     text.adj=c(-0.2, 1.7),main = "ROC curve of testing model")
+abline(a = 0,b = 1)
+text(x=0.8,y=0.7,paste("AUC: ", 100*round(as.numeric(ROCRauclm@y.values), 
+                                      digits = 4),
+                       "%",sep = ""),col = "red")
+
+```
+
+**Logistic regression**
+
+```{r}
+nfraud.log_under <- glm(Class ~., data = nfraud.train_under, 
+                        family = "binomial")
+summary(nfraud.log_under)
+```
+
+```{r warning=FALSE, results="hide"}
+step(nfraud.log_under, direction = c("backward"))
+```
+
+```{r warning=FALSE}
+nfraud.log_under1 <- glm(Class ~ Amount + Time + V1 + V4 + V5 + V6 + V8 + 
+    V9 + V10 + V11 + V12 + V14 + V15 + V16 + V17 + V23,
+    data = nfraud.train_under, family = "binomial")
+summary(nfraud.log_under1)
+
+```
+
+Through the step() function, we intend to select the smallest explanatory variable of AIC. After replacing the outliers value, We found step() function can filter out more features. We used the following model to test the accuracy.
+
+```{r}
+nfraud.train_under.pre <- predict.glm(nfraud.log_under1, type = "response")
+summary(nfraud.train_under.pre)
+nfraud.under.pred.res <-ifelse(nfraud.train_under.pre>.5,"1","0")
+table(nfraud.train_under$Class,nfraud.under.pred.res)
+```
+
+
+```{r}
+nfraud_under.opti <- optimalCutoff(nfraud.train_under$Class,
+                                   nfraud.train_under.pre,
+                                   returnDiagnostics = TRUE)
+nfraud_under.opti$misclassificationError
+nfraud.under.pred.opti.res <- ifelse( nfraud.train_under.pre > 
+                                      nfraud_under.opti$optimalCutoff, 
+                                     "1","0" )
+table(nfraud.train_under$Class,nfraud.under.pred.opti.res)
+```
+
+
+```{r}
+nfraud.test_under.pre <- predict(nfraud.log_under1, type = "response", 
+                                 newdata = nfraud.test_under)
+nfraud.test_under.pre.res <-  ifelse(nfraud.test_under.pre > 
+                                       nfraud_under.opti$optimalCutoff, 
+                                     "1","0")
+table(nfraud.test_under$Class ,nfraud.test_under.pre.res)
+```
+
+
+```{r}
+cat("The prediction error of Train set is =", 
+    sqrt(mean((nfraud.train_under.pre - nfraud.train_under$Class)^2)), "\n",
+    "The prediction error of Test set is =", 
+    sqrt(mean((nfraud.test_under.pre - nfraud.test_under$Class)^2)))
+
+```
+
+## Use the balanced model into the original data set - creditcard
+
+```{r}
+nfraud.train1 <- glm(Class ~ Amount + Time + V1 + V4 + V5 + V6 + V8 + 
+    V9 + V10 + V11 + V12 + V14 + V15 + V16 + V17 + V23,
+    data = creditcard, family = "binomial")
+```
+
+
+```{r}
+nfraud.train.pre <- predict.glm(nfraud.train1, type = "response")
+nfraud.train.opti <- optimalCutoff(creditcard$Class, nfraud.train.pre,
+                                   returnDiagnostics = TRUE)
+nfraud.train.opti$misclassificationError
+nfraud.train.pred.opti.res <- ifelse( nfraud.train.pre > 
+                                      nfraud.train.opti$optimalCutoff, 
+                                     "1","0" )
+table(creditcard$Class,nfraud.train.pred.opti.res)
+```
+
+## Check the accuracy
+
+```{r}
+accuracy.meas(creditcard$Class, nfraud.train.pre, 
+              threshold = nfraud.train.opti$optimalCutoff)
+roc.curve(creditcard$Class, nfraud.train.pre, plotit = F)
+```
+
+The accuracy of the data set after the balance is higher than that of the imbalance. Therefore, the early processing of data is an important step to increase accuracy.
+For balance the data we split the data into two nfraud.train and nfraud.test data set with a split radio=0.7. Class will be response variable and all other will be predictor variables.
+Accuracy: The accuracy of the model is 0.978 high than 0.8 which mean our model accurate is high than usual.
+Precision: The precision is equal to 0.773 which mean our model has 93% degree of prediction accuracy.It shows that there are still false positives in the data results.
+Recall: The recall value is 0.803. The higher the recall rate represent probability of the actual user being predicted. Our model has recall value 0.803 which is higher than usual.
+Specificity: It represents the proportion of predictions correct in all negative samples. Thus, the proportion is 0.9995 which is pretty good.
+AUC Area:The AUC is 0.978 which mean shows predictive ability of the model is pretty good.
+
+```{r}
+ROCRpred <- prediction(nfraud.train.pre, creditcard$Class)
+ROCRperf <- performance(ROCRpred, "tpr", "fpr")
+ROCRauc <- performance(ROCRpred,measure = "auc")
+par(mar = c(5, 3, 2,3),pty='s')
+plot(ROCRperf, colorize=TRUE, print.cutoffs.at = seq(0,1, by = 0.1), 
+     text.adj=c(-0.2, 1.7),main = "ROC curve of testing model")
+abline(a = 0,b = 1)
+text(x=0.8,y=0.7,paste("AUC: ", 100*round(as.numeric(ROCRauc@y.values), 
+                                      digits = 4),
+                       "%",sep = ""),col = "red")
+
+```
+
+### Ridge Regression
+
+```{r}
+set.seed(1234)
+lambda_seq <- 10^seq(2,-2, by=-0.1)
+rx_vars <- model.matrix(Class~., nfraud.train_under)[ , -1]
+ry_var <- nfraud.train_under$Class
+rcv_output <- cv.glmnet(rx_vars, ry_var, alpha = 0, lambda = lambda_seq)
+```
+
+
+```{r}
+plot(rcv_output)
+```
+
+
+```{r}
+Rglm <- glmnet(rx_vars, ry_var, alpha = 0)
+plot(Rglm, xvar = "lambda")
+```
+
+
+**Find lambda.min and lambda.1se**
+```{r}
+Rbest.l <- rcv_output$lambda.min
+R1se.l <- rcv_output$lambda.1se
+cat("The best Ridge lambda is =", Rbest.l, "\n")
+cat("The most regularized lambda is =" , R1se.l)
+
+```
+
+
+**Rebuilt the model with best lambda** 
+```{r}
+R1se <- glmnet(rx_vars, ry_var, alpha = 0, lambda = R1se.l)
+RBest <- glmnet(rx_vars, ry_var, alpha = 0, lambda = Rbest.l)
+```
+
+**Coefficients training**
+
+```{r}
+coef(RBest)
+coef(R1se)
+```
+
+
+```{r}
+pre_ridge <- predict(RBest, s = Rbest.l, newx = rx_vars)
+cat("The prediction error of Train set is =", 
+    sqrt(mean((pre_ridge - nfraud.train_under$Class)^2)))
+```
+
+
+```{r}
+rx_vars_test <- model.matrix(Class~., nfraud.test_under)[, -1]
+pre_ridge_test <- predict(RBest, s = Rbest.l, newx = rx_vars_test)
+cat("The prediction error of Test set is =" ,
+    sqrt(mean(pre_ridge_test - nfraud.test_under$Class)^2))
+
+```
+
+## Use the best lambda into the original data
+
+```{r}
+set.seed(1234)
+rx_vars_raw <- model.matrix(Class~., creditcard)[ , -1]
+ry_var_raw <- creditcard$Class
+rawridge <- glmnet(rx_vars_raw, ry_var_raw, alpha = 0, lambda = Rbest.l)
+```
+
+```{r}
+pre_ridge_raw <- predict(rawridge, s = Rbest.l, newx = rx_vars_raw)
+pre_ridge_raw.opti <- optimalCutoff(creditcard$Class, pre_ridge_raw,
+                                   returnDiagnostics = TRUE)
+pre_ridge_raw.opti$misclassificationError
+pre_ridge_raw.opti.res <- ifelse( pre_ridge_raw > 
+                                     pre_ridge_raw.opti$optimalCutoff, 
+                                     "1","0" )
+table(creditcard$Class,pre_ridge_raw.opti.res)
+```
+
+
+
+
+```{r, warning= FALSE}
+accuracy.meas(creditcard$Class, pre_ridge_raw, 
+              threshold = pre_ridge_raw.opti$optimalCutoff)
+roc.curve(creditcard$Class, pre_ridge_raw, plotit = F)
+```
+
+```{r}
+prodr <- prediction(pre_ridge_raw, creditcard$Class)
+perfr <- performance(prodr, measure = "tpr", x.measure = "fpr")
+```
+
+
+```{r}
+ROCRaucr <- performance(prodr,measure = "auc")
+par(mar = c(5, 3, 2,3),pty='s')
+plot(perfr, colorize=TRUE, print.cutoffs.at = seq(0,1, by = 0.1), 
+     text.adj=c(-0.2, 1.7),main = "ROC curve of Ridge regression training model")
+abline(a = 0,b = 1)
+text(x=0.8,y=0.7,paste("AUC: ",
+                       100*round(as.numeric(ROCRaucr@y.values),digits = 4),
+                       "%",sep = ""),col = "red", cex = 0.6)
+
+```
+
+
+```{r}
+#true positive rate
+tpr.points <- attr(perfr, "y.values")[[1]]
+#tpr.points
+
+#false positive rate
+fpr.points <- attr(perfr,"x.values")[[1]]
+#fpr.points
+
+#area under the curve
+auc <- attr(performance(prodr, "auc"), "y.values")[[1]]
+formatted_auc <- signif(auc, digits=4)
+
+
+roc.data <- data.frame(fpr=fpr.points, tpr=tpr.points, model="GLM")
+
+
+ggplot(roc.data, aes(x=fpr, ymin=0, ymax=tpr)) +
+  geom_ribbon(alpha=0.2) +
+  geom_line(aes(y=tpr)) +
+  ggtitle(paste0("ROC Curve for Log-Transformed Data w/ AUC=", formatted_auc))
+```
+
+From the results of AUC, reducing the high variance did not increase the accuracy. We continue to look at the results of regularization using LASSO regression.
+
+
+### LASSO regression
+
+```{r}
+set.seed(1234)
+lx_vars <- model.matrix(Class~., nfraud.train_under)[ , -1]
+ly_var <- nfraud.train_under$Class
+lcv_output <- cv.glmnet(lx_vars, ly_var, alpha = 1, lambda = lambda_seq)
+plot(lcv_output)
+```
+
+```{r}
+Lglm <- glmnet(lx_vars, ly_var, alpha = 1)
+plot(Lglm, xvar="lambda")
+
+```
+
+
+**Find lambda.min and lambda.1se**
+```{r}
+Lbest.l <- lcv_output$lambda.min
+L1se.l <- lcv_output$lambda.1se
+cat("The best LASSO lambda is =", Lbest.l, "\n")
+cat("The most regularized lambda is =" , L1se.l)
+
+```
+
+
+**Rebuilt the model with best lambda**
+```{r}
+L1se <- glmnet(lx_vars, ly_var, alpha = 1, lambda = L1se.l)
+LBest <- glmnet(lx_vars, ly_var, alpha = 1, lambda = Lbest.l)
+```
+
+**Coefficients training**
+
+```{r}
+coef(LBest)
+coef(L1se)
+```
+
+
+```{r}
+pre_LASSO <- predict(LBest, s = Lbest.l, newx = lx_vars)
+cat("The prediction error of Train set is =", 
+    sqrt(mean((pre_LASSO - nfraud.train_under$Class)^2)))
+
+```
+
+```{r}
+lx_vars_test <- model.matrix(Class~., nfraud.test_under)[, -1]
+pre_LASSO_test <- predict(LBest, s = Lbest.l, newx = lx_vars_test)
+cat("The prediction error of Test set is =" ,
+    sqrt(mean((pre_LASSO_test - nfraud.test_under$Class)^2)))
+
+```
+
+By comparing the RMSE results of Ridge and LASSO regression, although LASSO can quickly screen out features, the accuracy rate is not as high as Ridge's accuracy after ignoring many features. Ridge test set RMSE is much smaller than LASSO.
+
+## Use the best lambda parameter into the original data set - creditcard
+
+```{r}
+set.seed(1234)
+lx_vars_raw <- model.matrix(Class~., creditcard)[ , -1]
+ly_var_raw <- creditcard$Class
+rawLASSO <- glmnet(lx_vars_raw, ly_var_raw, alpha = 1, lambda = Lbest.l)
+```
+
+
+```{r}
+pre_LASSO_raw <- predict(rawLASSO, s = Lbest.l, newx = lx_vars_raw)
+pre_LASSO_raw.opti <- optimalCutoff(creditcard$Class, pre_LASSO_raw,
+                                   returnDiagnostics = TRUE)
+pre_LASSO_raw.opti$misclassificationError
+pre_LASSO_raw.opti.res <- ifelse(pre_LASSO_raw > 
+                                     pre_LASSO_raw.opti$optimalCutoff, 
+                                     "1","0" )
+table(creditcard$Class,pre_LASSO_raw.opti.res)
+```
+
+
+
+```{r,warning=FALSE}
+accuracy.meas(creditcard$Class, pre_LASSO_raw, 
+              threshold = Lbest.l)
+roc.curve(creditcard$Class, pre_LASSO_raw, plotit = F)
+```
+
+
+```{r}
+prodl <- prediction(pre_LASSO_raw, ly_var_raw)
+perfl <- performance(prodl, measure = "tpr", x.measure = "fpr")
+ROCRaucl <- performance(prodl,measure = "auc")
+par(mar = c(5, 3, 2,3),pty='s')
+plot(perfl, colorize=TRUE, print.cutoffs.at = seq(0,1, by = 0.1), 
+     text.adj=c(-0.2, 1.7),main = "ROC curve of LASSO regression training model")
+abline(a = 0,b = 1)
+text(x=0.8,y=0.7,paste("AUC: ",
+                       100*round(as.numeric(ROCRaucl@y.values),digits = 4),
+                       "%",sep = ""),col = "red")
+
+```
+
+```{r}
+#true positive rate
+tpr.pointsl <- attr(perfl, "y.values")[[1]]
+#tpr.pointsl
+
+#false positive rate
+fpr.pointsl <- attr(perfl,"x.values")[[1]]
+#fpr.pointsl
+
+#area under the curve
+aucl <- attr(performance(prodl, "auc"), "y.values")[[1]]
+formatted_aucl <- signif(aucl, digits=4)
+
+
+roc.datal <- data.frame(fpr=fpr.pointsl, tpr=tpr.pointsl, model="GLM")
+
+
+ggplot(roc.datal, aes(x=fpr, ymin=0, ymax=tpr)) +
+  geom_ribbon(alpha=0.8) +
+  geom_line(aes(y=tpr)) +
+  ggtitle(paste0("ROC Curve for Log-Transformed Data w/ AUC=", formatted_aucl))
+```
+
+
+??????
+
+**Compare the models**
+
+```{r}
+plot(ROCRperflm, col = c(rgb(0.9,0.7,0.1,0.7)), main = "ROC Comparaion")
+text(x=0.4,y=0.6,paste("AUC: ",
+                       100*round(as.numeric(ROCRauclm@y.values),digits = 4),
+                       "%",sep = ""),col =c(rgb(0.9,0.7,0.1,0.7)))
+# to add to the same graph: add=TRUE
+plot(ROCRperf, col = c(rgb(0.1,0.9,0.1,0.7)), add = TRUE)
+text(x=0.5,y=0.7,paste("AUC: ",
+                       100*round(as.numeric(ROCRauc@y.values),digits = 4),
+                       "%",sep = ""),col = c(rgb(0.1,0.9,0.1,0.7)))
+plot(perfr, col = c(rgb(0.9,0.1,0.1,0.7)), add = TRUE)
+text(x=0.6,y=0.8,paste("AUC: ",
+                       100*round(as.numeric(ROCRaucr@y.values),digits = 4),
+                       "%",sep = ""),col = c(rgb(0.9,0.1,0.1,0.7)))
+plot(perfl, col = c(rgb(0.8,0.4,0.1,0.7)), add = TRUE)
+text(x=0.9,y=0.6,paste("AUC: ",
+                       100*round(as.numeric(ROCRaucl@y.values),digits = 4),
+                       "%",sep = ""),col = c(rgb(0.8,0.4,0.1,0.7)))
+legend("bottomright", 
+  legend = c("Linear","Logsitic", "Ridge", "LASSO"), 
+  col = c(rgb(0.9,0.7,0.1,0.7), 
+          rgb(0.1,0.9,0.1,0.7),
+  rgb(0.9,0.1,0.1,0.7),
+  rgb(0.8,0.4,0.1,0.7)), 
+  pch = c(15,17,19,21), 
+  bty = "n", 
+  pt.cex = 1.8, 
+  cex = 1.0, 
+  text.col = "black", 
+  horiz = F , 
+  inset = c(0.1, 0.1))
+abline(a = 0,b = 1)
+
+```
+
+???????
+
+
+
+
+# Conclusion
+
+By modeling credit card transaction data, it is tested whether these independent variables can effectively detect the accuracy of credit card fraud. Our team got the data at the beginning of the period, and when we observed the data, we found that there was no missing data in the data set. This is very good news for us. After all, if the missing values in the credit card data are merely deleted, we don’t know whether it will affect the accuracy of the modeling. When analyzing the variable of Class, it is found that there is a serious imbalance in this data column. When testing whether the imbalance phenomenon has an impact on the accuracy of modeling, we used cases on the Internet to analyze the data and found that the accuracy is not satisfied. Therefore, the processing of data balance is the result of modeling and subsequent analysis settings. The accuracy of the presentation plays a crucial role.
+
+Through the boxplot() function, we found that there are extreme outliers values in the most positively correlated and most negatively each four correlated independent variables. In order to increase the accuracy of the model, we processed the outliers values. Not only delete processing, we worry that only deleting will reduce the overall information and the sensitivity of the data set, we have replaced to 5% quantile and 95% quantile it after discussion.
+
+In the whole analysis process, we used 3 models: Logistic model, Ridge model and LASSO model. Before the model analysis, the problem of outliers and imbalance of the total data has been solved, and we split the data into 70% of train set and 30% of test set. When using Logistic model, in order to find the independent variables related to Class, we use the step() function. When the AIC value is found to be the smallest, we find the corresponding variables, Amount, Time, V1, V4, V5, V6, V8, V9, V10, V11, V12, V14, V15, V16, V17 and V23.
+
+After we found the most suitable model, we carried out the accuracy test. Finally, when the RMSE calculation and analysis of train and test were carried out, we found that the selected model had a little overfitting phenomenon. We don’t know whether it is the problem of the selected independent variables or the reduction of the number of samples. With questions, we modeled the data again using Ridge model. When we use the Ridge model for analysis, we found that the Ridge model uses a relatively gentle way to reduce model complexity and high variance. Through the diagram and coefficient, it can be seen that all variables are present, but the process is constantly approaching 0. And the final RMSE result does not have overfitting phenomenon, so the problem of reducing the number of samples does not exist, then the logistic model of overfitting phenomenon is caused by filtering the features through the step() function.
+
+???????????
+
+
+# References
+
+Bluman, A. G. (2009). Elementary statistics: A step by step approach. New York, NY: McGraw-Hill Higher Education.
+
+Kabacoff, R. I. (2010). R in Action. manning.
+
+Janiobachmann. (2019, July 03). Credit Fraud || Dealing with Imbalanced Datasets. Retrieved October 19, 2020, from https://www.kaggle.com/janiobachmann/credit-fraud-dealing-with-imbalanced-datasets
+
+Sign In. (n.d.). Retrieved October 19, 2020, from https://rpubs.com/subasish/578582
+
