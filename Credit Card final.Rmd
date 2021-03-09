@@ -750,7 +750,6 @@ ggplot(roc.datal, aes(x=fpr, ymin=0, ymax=tpr)) +
 ```
 
 
-??????
 
 **Compare the models**
 
@@ -789,9 +788,6 @@ abline(a = 0,b = 1)
 
 ```
 
-???????
-
-
 
 
 # Conclusion
@@ -804,7 +800,6 @@ In the whole analysis process, we used 3 models: Logistic model, Ridge model and
 
 After we found the most suitable model, we carried out the accuracy test. Finally, when the RMSE calculation and analysis of train and test were carried out, we found that the selected model had a little overfitting phenomenon. We don’t know whether it is the problem of the selected independent variables or the reduction of the number of samples. With questions, we modeled the data again using Ridge model. When we use the Ridge model for analysis, we found that the Ridge model uses a relatively gentle way to reduce model complexity and high variance. Through the diagram and coefficient, it can be seen that all variables are present, but the process is constantly approaching 0. And the final RMSE result does not have overfitting phenomenon, so the problem of reducing the number of samples does not exist, then the logistic model of overfitting phenomenon is caused by filtering the features through the step() function.
 
-???????????
 
 
 # References
